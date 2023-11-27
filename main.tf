@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     hcloud = {
-      source = "hetznercloud/hcloud"
+      source  = "hetznercloud/hcloud"
       version = "1.44.1"
     }
   }
@@ -9,24 +9,70 @@ terraform {
 }
 
 provider "hcloud" {
-  token = var.hcloud_token
+  token = var.hetzner_cloud_api_token
 }
 
-resource "hcloud_server" "sonarqube_servers" {
-  count       = var.server_count
-  name        = "sonarqube-server-${count.index + 1}"
-  image       = var.image
-  datacenter  = var.datacenter
+locals {
+  script_args = [
+    var.ssh_user,
+    var.ssh_user_password,
+    var.sonarqube_admin_password,
+    var.sonarqube_db_host,
+    var.sonarqube_db_port,
+    var.sonarqube_db_name,
+    var.sonarqube_db_username,
+    var.sonarqube_db_password,
+    var.sonarqube_domain_name
+  ]
+}
+
+resource "hcloud_server" "sonarqube_server" {
+  name        = var.server_name
+  image       = var.server_image
+  datacenter  = var.server_datacenter
   server_type = var.server_type
-  ssh_keys    = [var.ssh_key_name]
+  ssh_keys    = [var.ssh_public_key_name]
+
+  provisioner "file" {
+    source      = "scripts/setup_sonarqube.sh"
+    destination = "/tmp/setup_sonarqube.sh"
+
+    connection {
+      type        = "ssh"
+      user        = "root"
+      private_key = file(var.ssh_private_key_path)
+      host        = self.ipv4_address
+    }
+  }
+
+  provisioner "file" {
+    source      = "${var.tls_certificates_base_path}/tls.crt"
+    destination = "/etc/ssl/certs/tls.crt"
+
+    connection {
+      type        = "ssh"
+      user        = "root"
+      private_key = file(var.ssh_private_key_path)
+      host        = self.ipv4_address
+    }
+  }
+
+  provisioner "file" {
+    source      = "${var.tls_certificates_base_path}/tls.pem"
+    destination = "/etc/ssl/private/tls.pem"
+
+    connection {
+      type        = "ssh"
+      user        = "root"
+      private_key = file(var.ssh_private_key_path)
+      host        = self.ipv4_address
+    }
+  }
 
   provisioner "remote-exec" {
     inline = [
-      "sudo apt update",
-      "sudo apt install -y docker.io",
-      "sudo systemctl start docker",
-      "sudo systemctl enable docker",
-      "sudo docker run -d --name sonarqube -p 9000:9000  -e SONARQUBE_JDBC_URL=${var.db_url}/${var.db_name}  -e SONARQUBE_JDBC_USERNAME=${var.db_username}  -e SONARQUBE_JDBC_PASSWORD=${var.db_password}  -e SONAR_SECURITY_USERLOGIN=${var.sonar_admin_username}  -e SONAR_SECURITY_USERPASSWORD=${var.sonar_admin_password}  sonarqube"
+      "chmod +x /tmp/setup_sonarqube.sh",
+      "/tmp/setup_sonarqube.sh ${join(" ", local.script_args)}"
     ]
 
     connection {
